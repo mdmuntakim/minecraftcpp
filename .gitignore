@@ -1,0 +1,17 @@
+# build output
+build/
+dist/
+.cxx/
+.gradle/
+
+# local Android configuration
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# editor and OS noise
+.idea/
+.vscode/
+.DS_Store
