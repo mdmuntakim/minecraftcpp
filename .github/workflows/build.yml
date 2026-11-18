@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Configure, build, test
         run: ./build.sh host
-      - name: Upload benchmark log
+      - name: Save benchmark log
         if: always()
         run: ./build/host/mcc_bench | tee bench.txt
       - uses: actions/upload-artifact@v4
@@ -26,7 +26,7 @@ jobs:
   android:
     name: Android APK (arm64-v8a)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -35,13 +35,29 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages
+      # Use the SDK and NDK that the runner image already provides, and only
+      # install what is missing. This avoids the broken "tools" package that
+      # some setup-android versions try to fetch.
+      - name: Android SDK and NDK
         run: |
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" \
-            "ndk;27.3.13750724"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          SM="$(find "$SDK/cmdline-tools" -name sdkmanager 2>/dev/null | head -1 || true)"
+          HAVE_NDK="$(find "$SDK/ndk" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1 || true)"
+          HAVE_BT="$(find "$SDK/build-tools" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1 || true)"
+          if [ -z "$HAVE_NDK" ] || [ -z "$HAVE_BT" ] || [ ! -d "$SDK/platforms/android-35" ]; then
+            [ -n "$SM" ] || { echo "no sdkmanager and an incomplete SDK" >&2; exit 1; }
+            yes | timeout 180 "$SM" --licenses >/dev/null 2>&1 || true
+            timeout 900 "$SM" --install "platforms;android-35" \
+              "build-tools;35.0.0" "ndk;27.3.13750724"
+          fi
+          NDK_DIR="$(find "$SDK/ndk" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "SDK: $SDK"
+          echo "NDK: $NDK_DIR"
+          ls "$SDK/platforms" | tail -3
 
       - name: Compile every supported ABI
         run: ./build.sh check
@@ -53,7 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           APK=dist/MinecraftCpp-0.1.0-arm64-v8a.apk
-          BT="$ANDROID_HOME/build-tools/35.0.0"
+          BT="$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)"
           "$BT/aapt2" dump badging "$APK" | grep -E \
             "package: name='tw.jjala.minecraftc'|launchable-activity|native-code: 'arm64-v8a'"
           "$BT/apksigner" verify --print-certs "$APK"
